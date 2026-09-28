@@ -9,12 +9,17 @@
   :root { --acc:#ffcc33; --bg:#0d0f14; --panel:rgba(12,14,20,.88); --txt:#f2f2f2; --mut:#9aa0ad; --ok:#39d98a; --bad:#ff5566; }
   * { box-sizing:border-box; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--txt); font:15px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif; overflow:hidden; }
-  #map { position:absolute; inset:0; background:#1a1d24; }
+  #map { position:absolute; inset:0; background:#23262c; }
   .leaflet-control-attribution { font-size:10px; opacity:.7; }
-  .leaflet-tile-pane { filter:invert(1) hue-rotate(185deg) brightness(.85) contrast(.95) saturate(.7); }
 
   /* машина всегда в центре экрана, карта едет под ней */
-  #car { position:absolute; left:50%; top:50%; width:22px; height:40px; margin:-20px 0 0 -11px; z-index:500; pointer-events:none; filter:drop-shadow(0 3px 4px rgba(0,0,0,.7)); }
+  #car { position:absolute; left:50%; top:50%; width:22px; height:40px; margin:-20px 0 0 -11px; z-index:500; pointer-events:none;
+         filter:drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 6px rgba(255,204,51,.95)) drop-shadow(0 3px 4px rgba(0,0,0,.7)); }
+  #halo { position:absolute; left:50%; top:50%; width:0; height:0; z-index:499; pointer-events:none; }
+  #halo::before { content:''; position:absolute; left:-24px; top:-24px; width:48px; height:48px; border-radius:50%;
+         border:2px solid rgba(255,204,51,.8); animation:halo 1.4s ease-out infinite; }
+  @keyframes halo { from { transform:scale(.55); opacity:1; } to { transform:scale(1.25); opacity:0; } }
+  #fx { position:absolute; inset:0; width:100%; height:100%; z-index:450; pointer-events:none; }
   #arrow { position:absolute; left:50%; top:50%; width:0; height:0; z-index:499; pointer-events:none; display:none; }
   #arrow div { position:absolute; left:-10px; top:-62px; width:20px; height:20px; clip-path:polygon(50% 0,100% 100%,50% 75%,0 100%); background:var(--acc); }
   #arrow span { position:absolute; left:-40px; top:-88px; width:80px; text-align:center; font-weight:700; font-size:12px; color:var(--acc); text-shadow:0 1px 3px #000; }
@@ -73,7 +78,9 @@
 <body>
 <div id="map"></div>
 
-<svg id="car" viewBox="0 0 22 40" preserveAspectRatio="none"><rect x="1" y="1" width="20" height="38" rx="6" fill="#ffcc33" stroke="#1a1a1a" stroke-width="1.5"/><rect x="4" y="8" width="14" height="8" rx="2" fill="#223"/><rect x="4" y="26" width="14" height="6" rx="2" fill="#223"/><rect x="3" y="1.5" width="4" height="2" fill="#fff"/><rect x="15" y="1.5" width="4" height="2" fill="#fff"/></svg>
+<svg id="car" viewBox="0 0 22 40" preserveAspectRatio="none"><rect x="1" y="1" width="20" height="38" rx="6" fill="#ffcc33" stroke="#1a1a1a" stroke-width="1.5"/><rect x="9.5" y="2" width="3" height="36" fill="#1a1a1a" opacity=".55"/><rect x="4" y="8" width="14" height="8" rx="2" fill="#223"/><rect x="4" y="26" width="14" height="6" rx="2" fill="#223"/><rect x="3" y="1.5" width="4" height="2" fill="#fff"/><rect x="15" y="1.5" width="4" height="2" fill="#fff"/></svg>
+<canvas id="fx"></canvas>
+<div id="halo"></div>
 <div id="arrow"><div></div><span></span></div>
 
 <div id="top" class="hud" style="display:none">
@@ -108,7 +115,7 @@
       <button class="btn sec" onclick="startSearch()">Найти</button>
     </div>
     <div id="status"></div>
-    <p class="hint" style="margin-top:14px">Светофоры и односторонние (жёлтые стрелки) настоящие: на красный и по встречке — штраф и розыск. Управление: стрелки / WASD — куда ехать по карте, X — задний ход, пробел — ручник, C — классическое управление, +/− — масштаб, M — заказы. На телефоне — кнопки на экране.</p>
+    <p class="hint" style="margin-top:14px">Светофоры и односторонние (жёлтые стрелки) настоящие: на красный и по встречке — штраф и розыск. На дорогах машины и пешеходы (T — выключить трафик). Управление: стрелки / WASD — куда ехать по карте, X — задний ход, пробел — ручник, C — классическое управление, +/− — масштаб, M — заказы. На телефоне — кнопки на экране.</p>
   </div>
 </div>
 
@@ -121,13 +128,14 @@ const MAX_V = 25, REV_V = 7; // м/с: вперёд, задний ход
 // полная ширина проезжей части, м (если в OSM нет lanes/width)
 // классы дорог из тайлов OpenMapTiles, по которым ездит машина (path/pier/bridge — пешеходное, мимо)
 const CAR_CLASSES = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor', 'service', 'track']);
-const ROAD_W = { motorway:14, trunk:12, primary:11, secondary:9, tertiary:8, unclassified:6.5, residential:6.5, living_street:5, service:4.5, track:4 };
+// ширины с запасом против реальных: на двусторонней улице должны разъехаться две машины по 2,2 м
+const ROAD_W = { motorway:16, trunk:14, primary:13, secondary:11, tertiary:10, unclassified:8, residential:8, living_street:6.5, service:5, track:4 };
 // предел скорости по классу дороги, м/с: трасса 130 км/ч, грунтовка 50, остальное 90
 const ROAD_VMAX = { motorway:36, trunk:36, track:14 };
 // «цена» метра дороги для маршрута: навигатор ведёт по большим улицам, а не срезает дворами
 const ROAD_COST = { motorway:0.7, trunk:0.7, primary:0.8, secondary:0.85, tertiary:0.95, residential:1.3, service:2.5, track:2 };
 const MIN_COST = 0.7;
-const CAR_L = 6, CAR_W = 2.6, CAR_HALF = 1.1; // размер машины в метрах (чуть крупнее реальной, чтобы читалась)
+const CAR_L = 5, CAR_W = 2.2, CAR_HALF = 1.0; // размер машины в метрах (почти реальный)
 const CELL = 40;
 
 let map, lat0, lon0, MLON, MLAT = 110540;
@@ -185,7 +193,7 @@ async function startAt(la, lo, name) {
   try {
     const [tx, ty] = tileOf(0, 0);
     const jobs = [];
-    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) { queuedChunks.add((tx + i) + ',' + (ty + j)); jobs.push(loadTile(tx + i, ty + j)); }
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) jobs.push(getTile(tx + i, ty + j));
     await Promise.all(jobs);
   }
   catch (e) { status('Карта не ответила (' + e.message + '). Играем без привязки к дорогам.'); await new Promise(r => setTimeout(r, 1200)); }
@@ -276,8 +284,11 @@ async function loadTile(tx, ty) {
   if (!TILE_URL) TILE_URL = (await (await fetch('https://tiles.openfreemap.org/planet')).json()).tiles[0];
   const r = await fetch(TILE_URL.replace('{z}', TZ).replace('{x}', tx).replace('{y}', ty));
   if (!r.ok) throw new Error('тайл ' + r.status);
-  ingestTile(decodeMVT(await r.arrayBuffer()), tx, ty);
+  const Ls = decodeMVT(await r.arrayBuffer());
+  prepareGeo(Ls, tx, ty);
+  ingestTile(Ls, tx, ty);
   loadedChunks.add(tx + ',' + ty);
+  redrawAround(tx, ty);
   sigQueue.push([tx, ty]); pumpSignals();
 }
 
@@ -308,7 +319,7 @@ function nameAt(x, y) {
 
 const POI_OK = /^(shop|grocery|clothing_store|fast_food|cafe|restaurant|bar|beer|bank|pharmacy|theatre|cinema|museum|library|post|bakery|alcohol_shop|hairdresser|car|fuel|lodging|hospital|ice_cream|art_gallery)$/;
 function ingestTile(Ls, tx, ty) {
-  const fresh = [], newSegs = [], batch = tx + ',' + ty;
+  const fresh = [], newSegs = [], pathSegs = [], batch = tx + ',' + ty;
   const T = Ls.transportation, N = Ls.transportation_name, P = Ls.poi;
   const E = T ? T.extent : 4096;
   const xy = (px, py) => { const [la, lo] = tileToLL(tx + px / E, ty + py / E); return toXY(la, lo); };
@@ -325,7 +336,17 @@ function ingestTile(Ls, tx, ty) {
   }
   if (T) for (const F of T.feats) {
     if (F.type !== 2) continue;
-    const pr = mvtProps(T, F); if (!CAR_CLASSES.has(pr.class)) continue;
+    const pr = mvtProps(T, F);
+    if (pr.class === 'path') { // пешеходная дорожка: нужна только чтобы найти переходы через проезжую часть
+      const plvl = pr.brunnel === 'bridge' ? (pr.layer || 1) : pr.brunnel === 'tunnel' ? (pr.layer || -1) : 0;
+      for (const line of mvtGeom(F)) for (let i = 1; i < line.length; i++) {
+        const c = clipSeg(line[i-1][0], line[i-1][1], line[i][0], line[i][1], E); if (!c) continue;
+        const a = xy(c[0], c[1]), b = xy(c[2], c[3]);
+        pathSegs.push({ ax:a.x, ay:a.y, bx:b.x, by:b.y, lvl:plvl });
+      }
+      continue;
+    }
+    if (!CAR_CLASSES.has(pr.class)) continue;
     const kind = pr.class === 'minor' ? 'residential' : pr.class;
     const w = ROAD_W[kind] || 5, ow = pr.oneway === 1 ? 1 : pr.oneway === -1 ? -1 : 0;
     const lvl = pr.brunnel === 'bridge' ? (pr.layer || 1) : pr.brunnel === 'tunnel' ? (pr.layer || -1) : 0;
@@ -346,6 +367,7 @@ function ingestTile(Ls, tx, ty) {
   roadsOk = segs.length > 50;
   connectJunctions(newSegs);
   mergeTwins(newSegs, fresh);
+  addCrossings(pathSegs);
   if (P) for (const F of P.feats) {
     const pr = mvtProps(P, F); if (!pr.name || !POI_OK.test(pr.class)) continue;
     const g = mvtGeom(F)[0]; if (!g) continue;
@@ -430,10 +452,12 @@ function lightFor(g, heading, t) {
 }
 const LCOL = { g:'#39d98a', y:'#ffcc33', r:'#ff3b4e' };
 function drawSignals() {
+  return; // светофоры рисуются на слое трафика (drawFx)
   if (!lightRend) return;
   for (const g of signals) if (!g.mk) g.mk = L.circleMarker(toLL(g.x, g.y), { renderer:lightRend, radius:6, weight:2, color:'#111', fillOpacity:1, interactive:false }).addTo(map);
 }
 function updateSignals(t) {
+  return; // цвет считается при отрисовке в drawFx
   for (const g of signals) {
     if (!g.mk) continue;
     const c = lightFor(g, g.own, t);
@@ -696,7 +720,7 @@ async function pumpChunks() {
   const [ci, cj] = tileOf(nx, ny);
   chunkQueue.sort((a, b) => Math.hypot(a[0] - ci, a[1] - cj) - Math.hypot(b[0] - ci, b[1] - cj));
   const [i, j] = chunkQueue.shift();
-  try { await loadTile(i, j); }
+  try { await getTile(i, j); }
   catch (e) { setTimeout(() => queuedChunks.delete(i + ',' + j), 10000); } // не вышло — попробуем позже
   chunkActive--; chunkBusy = chunkActive > 0;
   pumpChunks();
@@ -730,6 +754,48 @@ function nearestRoad(x, y) {
   }
   return best;
 }
+// Ближайший перекрёсток впереди по текущей улице (до 150 м), от которого есть дорога в сторону want (±60°).
+// Идём по графу от узла перед машиной, пока не встретим узел, где сходится больше двух дорог.
+let turnPlan = null;
+const intent = { want:null, t:0 }, INTENT_T = 0.3; // сколько держать стрелку, чтобы сменить улицу
+function junctionAhead(want) {
+  const s = realSeg(car.x, car.y); if (!s) return null;
+  const hx = Math.sin(car.a), hy = Math.cos(car.a);
+  // узлы участка по порядку: концы + точки, где его разрезали боковые улицы (там и есть перекрёстки)
+  const dx = s.bx - s.ax, dy = s.by - s.ay, L2 = dx*dx + dy*dy || 1;
+  const uCar = ((car.x - s.ax) * dx + (car.y - s.ay) * dy) / L2, fwd = dx * hx + dy * hy > 0;
+  const chain = [{ u:0, node:s.na }, ...(s.cuts || []), { u:1, node:s.nb }];
+  const ahead = fwd ? chain.filter(c => c.u > uCar + 1e-6) : chain.filter(c => c.u < uCar - 1e-6).reverse();
+  if (!ahead.length) return null;
+  let cur = ahead[0].node;
+  const back = fwd ? chain.filter(c => c.u <= uCar + 1e-6).pop() : chain.find(c => c.u >= uCar - 1e-6);
+  let prev = back ? back.node : (fwd ? s.na : s.nb), acc = dist(car, cur);
+  for (let step = 0; step < 60 && acc < 150; step++) {
+    const out = cur.adj.filter(e => e.to !== prev && e.seg);
+    if (out.length > 1 || cur.adj.length > 2) {
+      let best = null, bd = 1.05;
+      for (const e of out) {
+        const dx = e.to.x - cur.x, dy = e.to.y - cur.y, L = Math.hypot(dx, dy) || 1;
+        let d = Math.atan2(dx, dy) - want; while (d > Math.PI) d -= 2*Math.PI; while (d < -Math.PI) d += 2*Math.PI;
+        const pen = e.legal ? 0 : 0.6;
+        if (Math.abs(d) + pen < bd) {
+          bd = Math.abs(d) + pen;
+          const ux = dx / L, uy = dy / L, lane = e.seg && !e.seg.ow ? e.seg.w / 4 : 0;
+          best = { d:acc, tx:cur.x + ux * 9 + uy * lane, ty:cur.y + uy * 9 - ux * lane, node:cur };
+        }
+      }
+      if (best) return best;
+    }
+    // дальше — прямо по той же улице
+    let nxt = null, bs = -2;
+    const px = cur.x - prev.x, py = cur.y - prev.y, pl = Math.hypot(px, py) || 1;
+    for (const e of out) { const dx = e.to.x - cur.x, dy = e.to.y - cur.y, st = (dx * px + dy * py) / pl / (Math.hypot(dx, dy) || 1); if (st > bs) { bs = st; nxt = e.to; } }
+    if (!nxt || bs < 0.5) return null;
+    acc += dist(cur, nxt); prev = cur; cur = nxt;
+  }
+  return null;
+}
+
 // помощь рулём: из направлений дорог под машиной берём ближайшее к желаемому (±70°).
 // Без этого «вниз» по улице, идущей под углом, упирает машину в бордюр.
 function roadHeading(x, y, want) {
@@ -749,9 +815,12 @@ function roadHeading(x, y, want) {
         if ((sg > 0 ? 1 - t : t) * len < 1) continue; // направление «за конец» сегмента — там дороги нет
         const h = Math.atan2(sg * dx, sg * dy);
         let d = h - want; while (d > Math.PI) d -= 2*Math.PI; while (d < -Math.PI) d += 2*Math.PI;
-        if (Math.abs(d) < bestDiff) {
-          bestDiff = Math.abs(d); found = true;
-          const tx = px + sg * dx / len * LOOK, ty = py + sg * dy / len * LOOK;
+        const pen = s.ow && s.ow !== sg ? 0.5 : 0; // против стрелки односторонней — только если иначе никак
+        if (Math.abs(d) + pen < bestDiff) {
+          bestDiff = Math.abs(d) + pen; found = true;
+          // целимся в свою (правую) полосу: на двусторонней — на четверть ширины вправо от оси
+          const ux = sg * dx / len, uy = sg * dy / len, lane = !s.ow && !s.virt ? s.w / 4 : 0;
+          const tx = px + ux * LOOK + uy * lane, ty = py + uy * LOOK - ux * lane;
           best = Math.atan2(tx - x, ty - y);
         }
       }
@@ -787,23 +856,195 @@ function placeCarOnRoad() {
   if (isFinite(n.d)) { car.x = n.px; car.y = n.py; }
 }
 
+// ---------- свой стиль карты: рисуем город сами из векторных тайлов ----------
+// Раньше под игрой лежали затемнённые картинки openstreetmap.org — «навигатор», а не игра.
+// Теперь каждый тайл карты рисуется на canvas один раз: земля, парки, вода, дороги (ровно той ширины,
+// по которой ездит машина), разметка, объёмные дома, подписи улиц и заведений.
+const STYLE = {
+  bg:'#1f2226',
+  landuse:{ residential:'#23262b', commercial:'#2b2933', retail:'#2d2a33', industrial:'#292b2c', railway:'#26282b',
+            cemetery:'#243129', hospital:'#2f2a2e', school:'#2b2a31', university:'#2b2a31', stadium:'#24382c', pitch:'#27402f', playground:'#27402f' },
+  landcover:{ grass:'#27412f', wood:'#1f3828', forest:'#1f3828', farmland:'#2d3326', sand:'#3a3628', wetland:'#233532', scrub:'#253b2c' },
+  park:'#27412f', water:'#1d3b5e',
+  // дороги тёмные с заметным бордюром, крыши — светлее и теплее: дом и дорога не должны путаться
+  curb:'#737987', asphalt:{ motorway:'#35383f', trunk:'#35383f', primary:'#32353c', secondary:'#31343a', tertiary:'#303339',
+                            residential:'#2e3136', service:'#2b2e33', track:'#4a4133' },
+  mark:'rgba(225,225,225,.75)', arrow:'rgba(160,170,188,.75)',
+  roofs:['#6c7080', '#7a7467', '#6b797b', '#7c6f70', '#676c79', '#80786a'], roofEdge:'rgba(170,176,190,.6)', shadow:'rgba(5,6,8,.8)',
+  label:'#e8ebf2', halo:'rgba(15,17,22,.9)', poi:'#f0c36a',
+};
+const tileGeo = new Map(), tilePromises = new Map();
+
+// подготовка геометрии тайла z14 один раз: полигоны/линии в пикселях тайла + bbox
+function prepareGeo(Ls, tx, ty) {
+  const out = { landuse:[], landcover:[], park:[], water:[], waterway:[], building:[], poi:[], E:4096 };
+  const take = (name, fn) => { const L = Ls[name]; if (!L) return; out.E = L.extent;
+    for (const F of L.feats) { const pr = mvtProps(L, F), rings = mvtGeom(F); if (!rings.length) continue;
+      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      for (const r of rings) for (const [x, y] of r) { if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y; }
+      fn({ pr, rings, bb:[x0, y0, x1, y1], type:F.type }); } };
+  take('landuse', f => out.landuse.push(f));
+  take('landcover', f => out.landcover.push(f));
+  take('park', f => { if (f.type === 3) out.park.push(f); });
+  take('water', f => out.water.push(f));
+  take('waterway', f => out.waterway.push(f));
+  take('building', f => out.building.push(f));
+  take('poi', f => { if (f.pr.name && POI_OK.test(f.pr.class)) out.poi.push(f); });
+  tileGeo.set(tx + ',' + ty, out);
+}
+// один и тот же тайл z14 грузится один раз — и для игры, и для отрисовки
+function getTile(tx, ty) {
+  const k = tx + ',' + ty;
+  if (!tilePromises.has(k)) { queuedChunks.add(k); tilePromises.set(k, loadTile(tx, ty).catch(e => { tilePromises.delete(k); queuedChunks.delete(k); throw e; })); }
+  return tilePromises.get(k);
+}
+
+const MapStyleLayer = L.GridLayer.extend({
+  createTile(c, done) {
+    const S = 256, dpr = Math.min(2, devicePixelRatio || 1), cv = document.createElement('canvas');
+    cv.width = cv.height = S * dpr;
+    const ctx = cv.getContext('2d'); ctx.scale(dpr, dpr);
+    ctx.fillStyle = STYLE.bg; ctx.fillRect(0, 0, S, S);
+    // какие тайлы z14 покрывает этот тайл карты
+    const f = Math.pow(2, c.z - TZ);
+    const t0x = Math.floor(c.x / f), t0y = Math.floor(c.y / f), t1x = Math.floor((c.x + 1) / f - 1e-9), t1y = Math.floor((c.y + 1) / f - 1e-9);
+    const need = [];
+    for (let tx = t0x; tx <= t1x; tx++) for (let ty = t0y; ty <= t1y; ty++) need.push(getTile(tx, ty).catch(() => null));
+    Promise.all(need).then(() => { drawStyleTile(ctx, c, S); done(null, cv); });
+    return cv;
+  }
+});
+
+function drawStyleTile(ctx, c, S) {
+  const z = c.z, f = Math.pow(2, z - TZ);
+  const kpx = S * Math.pow(2, z) / (40075016.686 * Math.cos(lat0 * Math.PI / 180)); // пикселей на метр
+  // перевод: тайл z14 (tx,ty) + пиксель тайла → пиксель этого тайла карты
+  const t0x = Math.floor(c.x / f), t0y = Math.floor(c.y / f), t1x = Math.floor((c.x + 1) / f - 1e-9), t1y = Math.floor((c.y + 1) / f - 1e-9);
+  const tiles = [];
+  for (let tx = t0x; tx <= t1x; tx++) for (let ty = t0y; ty <= t1y; ty++) { const g = tileGeo.get(tx + ',' + ty); if (g) tiles.push([tx, ty, g]); }
+  const pathRings = (rings, tx, ty, E) => { const a = f * S / E, ox = (tx * f - c.x) * S, oy = (ty * f - c.y) * S;
+    ctx.beginPath(); for (const r of rings) { ctx.moveTo(ox + r[0][0] * a, oy + r[0][1] * a); for (let i = 1; i < r.length; i++) ctx.lineTo(ox + r[i][0] * a, oy + r[i][1] * a); } };
+  const visible = (bb, tx, ty, E, m) => { const a = f * S / E, ox = (tx * f - c.x) * S, oy = (ty * f - c.y) * S;
+    return ox + bb[2] * a > -m && ox + bb[0] * a < S + m && oy + bb[3] * a > -m && oy + bb[1] * a < S + m; };
+  const fillLayer = (name, colorOf) => { for (const [tx, ty, g] of tiles) for (const ft of g[name]) {
+    if (ft.type !== 3 || !visible(ft.bb, tx, ty, g.E, 2)) continue; const col = colorOf(ft.pr); if (!col) continue;
+    ctx.fillStyle = col; pathRings(ft.rings, tx, ty, g.E); ctx.fill(); } };
+  fillLayer('landuse', pr => STYLE.landuse[pr.class]);
+  fillLayer('landcover', pr => STYLE.landcover[pr.subclass] || STYLE.landcover[pr.class]);
+  fillLayer('park', () => STYLE.park);
+  fillLayer('water', () => STYLE.water);
+  ctx.strokeStyle = STYLE.water; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const [tx, ty, g] of tiles) for (const ft of g.waterway) {
+    if (!visible(ft.bb, tx, ty, g.E, 20)) continue;
+    ctx.lineWidth = Math.max(1, ({ river:14, canal:8, stream:3 }[ft.pr.class] || 3) * kpx);
+    pathRings(ft.rings, tx, ty, g.E); ctx.stroke();
+  }
+
+  // дороги — из наших отрезков (та же геометрия и ширина, что у физики машины)
+  const toPx = (x, y) => { const [la, lo] = toLL(x, y), n = Math.pow(2, z) * S;
+    return [(lo + 180) / 360 * n - c.x * S, (1 - Math.log(Math.tan(la * Math.PI / 180) + 1 / Math.cos(la * Math.PI / 180)) / Math.PI) / 2 * n - c.y * S]; };
+  const [nwLa, nwLo] = [tileToLatZ(c.y, z), c.x / Math.pow(2, z) * 360 - 180], [seLa, seLo] = [tileToLatZ(c.y + 1, z), (c.x + 1) / Math.pow(2, z) * 360 - 180];
+  const a0 = toXY(nwLa, nwLo), a1 = toXY(seLa, seLo), M = 25;
+  const list = [], seen = new Set();
+  for (let i = Math.floor((Math.min(a0.x, a1.x) - M) / CELL); i <= Math.floor((Math.max(a0.x, a1.x) + M) / CELL); i++)
+    for (let j = Math.floor((Math.min(a0.y, a1.y) - M) / CELL); j <= Math.floor((Math.max(a0.y, a1.y) + M) / CELL); j++)
+      for (const s of grid.get(i + ',' + j) || []) if (!seen.has(s)) { seen.add(s); list.push(s); }
+  const P = list.map(s => [toPx(s.ax, s.ay), toPx(s.bx, s.by)]);
+  const line = (i, w, cap) => { const [p, q] = P[i]; ctx.lineWidth = w; ctx.lineCap = cap; ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke(); };
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = STYLE.curb;                                          // бордюр
+  // на мелком масштабе дорога в метрах тоньше пикселя — держим минимальную толщину, чтобы сеть улиц читалась
+  list.forEach((s, i) => { if (!s.virt) line(i, Math.max((s.w + 0.9) * kpx, 2.6), 'round'); });
+  list.forEach((s, i) => { ctx.strokeStyle = STYLE.asphalt[s.kind] || STYLE.asphalt.residential; line(i, Math.max(s.w * kpx, 1.4), s.virt ? 'butt' : 'round'); });
+  if (kpx > 1.2) {
+    // осевая прерывистая на двусторонних широких улицах
+    ctx.strokeStyle = STYLE.mark; ctx.setLineDash([3 * kpx, 3 * kpx]);
+    list.forEach((s, i) => { if (!s.virt && !s.ow && s.w >= 8 && s.kind !== 'track') line(i, Math.max(1, 0.15 * kpx), 'butt'); });
+    ctx.setLineDash([]);
+    // стрелки односторонних: шеврон в середине каждого участка длиннее 12 м
+    ctx.strokeStyle = STYLE.arrow; ctx.lineWidth = Math.max(1.5, 0.25 * kpx); ctx.lineCap = 'round';
+    list.forEach((s, i) => { if (!s.ow || s.virt) return; const len = Math.hypot(s.bx - s.ax, s.by - s.ay); if (len < 12) return;
+      const [p, q] = P[i], dx = (q[0] - p[0]) * s.ow, dy = (q[1] - p[1]) * s.ow, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+      const cx = (p[0] + q[0]) / 2, cy = (p[1] + q[1]) / 2, e = 1.3 * kpx;
+      ctx.beginPath(); ctx.moveTo(cx - ux * e - uy * e, cy - uy * e + ux * e); ctx.lineTo(cx + ux * e * 0.6, cy + uy * e * 0.6); ctx.lineTo(cx - ux * e + uy * e, cy - uy * e - ux * e); ctx.stroke(); });
+  }
+
+  // дома: тень со смещением вниз-вправо по высоте (солнце сверху-слева), потом крыша
+  for (const pass of [0, 1]) for (const [tx, ty, g] of tiles) for (const ft of g.building) {
+    if (ft.type !== 3 || !visible(ft.bb, tx, ty, g.E, 30)) continue;
+    const h = Math.min(60, Math.max(3, ft.pr.render_height || 10)), off = h * 0.35 * kpx;
+    if (pass === 0) { ctx.save(); ctx.translate(off, off * 0.8); ctx.fillStyle = STYLE.shadow; pathRings(ft.rings, tx, ty, g.E); ctx.fill(); ctx.restore(); }
+    else {
+      const hash = Math.abs(Math.round(ft.bb[0] * 7 + ft.bb[1] * 13)) % STYLE.roofs.length;
+      ctx.fillStyle = STYLE.roofs[hash]; pathRings(ft.rings, tx, ty, g.E); ctx.fill();
+      if (kpx > 1) { ctx.strokeStyle = STYLE.roofEdge; ctx.lineWidth = 1; ctx.stroke(); }
+    }
+  }
+
+  // подписи: названия улиц (z ≥ 17) и заведений (z ≥ 18) — узнать «свой» город
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  const boxes = [];
+  const free = (x, y, w, hgt) => { for (const b of boxes) if (Math.abs(b[0] - x) < (b[2] + w) / 2 && Math.abs(b[1] - y) < (b[3] + hgt) / 2) return false; boxes.push([x, y, w, hgt]); return true; };
+  if (z >= 17) {
+    ctx.font = 'bold 11px system-ui, sans-serif';
+    const done = new Set();
+    list.forEach((s, i) => {
+      if (!s.name || s.virt || done.has(s.name)) return;
+      const [p, q] = P[i], mx = (p[0] + q[0]) / 2, my = (p[1] + q[1]) / 2;
+      if (mx < 0 || mx > S || my < 0 || my > S) return;
+      const w = ctx.measureText(s.name).width, len = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      let ang = Math.atan2(q[1] - p[1], q[0] - p[0]); if (ang > Math.PI / 2) ang -= Math.PI; if (ang < -Math.PI / 2) ang += Math.PI;
+      // подпись целиком внутри тайла, иначе соседний тайл её обрежет пополам
+      const hw = Math.abs(Math.cos(ang)) * w / 2 + Math.abs(Math.sin(ang)) * 7, hh = Math.abs(Math.sin(ang)) * w / 2 + Math.abs(Math.cos(ang)) * 7;
+      if (mx - hw < 1 || mx + hw > S - 1 || my - hh < 1 || my + hh > S - 1) return;
+      if (len < w + 16 || !free(mx, my, w, 14)) return;
+      done.add(s.name);
+      ctx.save(); ctx.translate(mx, my); ctx.rotate(ang);
+      ctx.strokeStyle = STYLE.halo; ctx.lineWidth = 3; ctx.strokeText(s.name, 0, 0); ctx.fillStyle = STYLE.label; ctx.fillText(s.name, 0, 0);
+      ctx.restore();
+    });
+  }
+  if (z >= 18) {
+    ctx.font = '10px system-ui, sans-serif';
+    for (const [tx, ty, g] of tiles) for (const ft of g.poi) {
+      const a = f * S / g.E, x = (tx * f - c.x) * S + ft.rings[0][0][0] * a, y = (ty * f - c.y) * S + ft.rings[0][0][1] * a;
+      if (x < 0 || x > S || y < 0 || y > S) continue;
+      const w = ctx.measureText(ft.pr.name).width;
+      if (x - w / 2 < 1 || x + w / 2 > S - 1 || y < 4 || y + 17 > S) continue; // целиком в тайле
+      if (!free(x, y + 9, w, 22)) continue;
+      ctx.fillStyle = STYLE.poi; ctx.beginPath(); ctx.arc(x, y, 3, 0, 6.2832); ctx.fill();
+      ctx.strokeStyle = STYLE.halo; ctx.lineWidth = 3; ctx.strokeText(ft.pr.name, x, y + 11); ctx.fillStyle = STYLE.poi; ctx.fillText(ft.pr.name, x, y + 11);
+    }
+  }
+}
+function tileToLatZ(y, z) { const n = Math.PI - 2 * Math.PI * y / Math.pow(2, z); return 180 / Math.PI * Math.atan(Math.sinh(n)); }
+
+// когда подгрузился соседний тайл z14, на стыке могла появиться склейка двойной дороги — перерисуем тайлы карты рядом
+function redrawAround(tx, ty) {
+  if (!styleLayer || !styleLayer._tiles) return;
+  for (const key in styleLayer._tiles) {
+    const t = styleLayer._tiles[key], c = t.coords, f = Math.pow(2, c.z - TZ);
+    if (f < 1 || !t.el.getContext) continue;
+    // только полоса тайлов карты вдоль границы нового района (внутри него тайлы и так ждали загрузки)
+    const x0 = tx * f, x1 = (tx + 1) * f, y0 = ty * f, y1 = (ty + 1) * f;
+    const inside = c.x >= x0 && c.x < x1 && c.y >= y0 && c.y < y1, near = c.x >= x0 - 1 && c.x <= x1 && c.y >= y0 - 1 && c.y <= y1;
+    if (inside || !near) continue;
+    const ctx = t.el.getContext('2d'), S = 256;
+    ctx.setTransform(1, 0, 0, 1, 0, 0); const dpr = t.el.width / S; ctx.scale(dpr, dpr);
+    ctx.fillStyle = STYLE.bg; ctx.fillRect(0, 0, S, S);
+    drawStyleTile(ctx, c, S);
+  }
+}
+let styleLayer = null;
+
 // ---------- карта ----------
 function initMap() {
   map = L.map('map', { zoomControl:false, attributionControl:true, dragging:false, scrollWheelZoom:false, doubleClickZoom:false, boxZoom:false, keyboard:false, touchZoom:false, zoomSnap:0.25, maxZoom:20 })
           .setView(toLL(car.x, car.y), zoom);
-  // стандартные тайлы OSM, «ночной режим» — CSS-фильтром (.leaflet-tile-pane). Для прода — свой тайл-сервер или API партнёра
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom:20, maxNativeZoom:19, attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · данные дорог: <a href="https://openfreemap.org">OpenFreeMap</a>'
-  }).addTo(map);
-  // подсветка проезжей части: ровно та зона, где машина может ехать (толщина линии = ширина дороги в метрах)
-  // прозрачность — у всего слоя, а не у линий: иначе на стыках сегментов наложения дают светлые пятна
-  map.createPane('roads').style.opacity = .28;
-  roadRend = L.canvas({ padding:0.3, pane:'roads' });
-  map.createPane('arrows'); arrowRend = L.canvas({ padding:0.3, pane:'arrows' });
-  map.createPane('route').style.zIndex = 450; // над дорогами и стрелками, под светофорами и маркерами
-  map.createPane('lights').style.zIndex = 460; lightRend = L.canvas({ padding:0.3, pane:'lights' });
-  drawSignals();
-  addRoadLines(ways);
+  // свой стиль карты (см. «свой стиль карты» выше): дороги, дома, парки, подписи рисуются из векторных тайлов
+  styleLayer = new MapStyleLayer({ tileSize:256, minZoom:12, maxZoom:20, maxNativeZoom:20, keepBuffer:3, updateWhenIdle:false, updateWhenZooming:false,
+    attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · тайлы <a href="https://openfreemap.org">OpenFreeMap</a>' }).addTo(map);
+  map.createPane('route').style.zIndex = 450; // линия маршрута — над картой, под маркерами
   applyZoom();
   setInterval(ensureChunks, 1000);
   map.on('click', e => setWaypoint(e.latlng));
@@ -812,6 +1053,7 @@ function initMap() {
 }
 
 function addRoadLines(list) {
+  return; // дороги и стрелки теперь рисуются в тайлах своего стиля карты (drawStyleTile)
   const k = 1 / mPerPx();
   for (const w of list) {
     roadLayer.push(L.polyline(w.ll, { renderer:roadRend, color:'#8a93a6', opacity:1, lineCap:w.virt ? 'butt' : 'round', lineJoin:'round',
@@ -831,7 +1073,7 @@ function addArrows(w) {
     for (; acc < len; acc += 35) {
       const cx = a.x + ux * acc, cy = a.y + uy * acc;
       L.polyline([toLL(cx - ux * 1.2 - uy * 1.4, cy - uy * 1.2 + ux * 1.4), toLL(cx + ux * 1.2, cy + uy * 1.2), toLL(cx - ux * 1.2 + uy * 1.4, cy - uy * 1.2 - ux * 1.4)],
-        { renderer:arrowRend, color:'#ffcc33', weight:2.5, opacity:.85, interactive:false }).addTo(map);
+        { renderer:arrowRend, color:'#d5dbe6', weight:2, opacity:.6, interactive:false }).addTo(map); // не жёлтые: жёлтый — цвет игрока
     }
     acc -= len;
   }
@@ -843,8 +1085,10 @@ function applyZoom() {
   const k = 1 / mPerPx();
   roadLayer.forEach(l => l.setStyle({ weight:l.options.w * k }));
   if (routeLine) routeLine.setStyle({ weight:Math.max(4, 2.4 * k) });
-  const c = $('car'); c.style.width = CAR_W * k + 'px'; c.style.height = CAR_L * k + 'px';
-  c.style.margin = (-CAR_L * k / 2) + 'px 0 0 ' + (-CAR_W * k / 2) + 'px';
+  // на экране машина игрока не меньше 30 px в длину — на мелком масштабе её иначе не найти
+  const ck = Math.max(k, 30 / CAR_L);
+  const c = $('car'); c.style.width = CAR_W * ck + 'px'; c.style.height = CAR_L * ck + 'px';
+  c.style.margin = (-CAR_L * ck / 2) + 'px 0 0 ' + (-CAR_W * ck / 2) + 'px';
 }
 
 // ---------- заказы ----------
@@ -977,6 +1221,328 @@ function updateCop(dt) {
   const el = cop.m.getElement(); if (el) el.firstChild.style.transform = `rotate(${cop.a}rad)`;
 }
 
+// ---------- трафик: машины и пешеходы ----------
+// Всё движущееся рисуется на одном canvas поверх карты (#fx) — 70+ DOM-маркеров с перерисовкой
+// каждый кадр тормозили бы. Координаты — те же метры, что у игрока.
+let trafficOn = true;
+const npcs = [], peds = [], crossings = [], crossGrid = new Map();
+// плотность: видимый радиус экрана ~130 м, поэтому держим всех в 300 м и рождаем сразу за краем экрана
+let npcId = 0;
+const NPC_N = 44, PED_N = 60, NPC_R = [140, 300], PED_R = [140, 240];
+// на тёмной карте тёмные машины не видно — только светлые и насыщенные цвета
+const NPC_COLORS = ['#f2f2f2', '#4f8ff7', '#e05252', '#ff7eb6', '#48c774', '#b784f7', '#5fd3e0', '#c8ccd4'];
+const PED_COLORS = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#1abc9c', '#ecf0f1', '#e67e22', '#34495e'];
+// скорость потока по классу дороги, м/с (до SCALE, как у игрока)
+const NPC_V = { motorway:30, trunk:26, primary:16, secondary:15, tertiary:13, residential:9, service:5, track:6 };
+
+// «Зебры»: там, где пешеходная дорожка (path) пересекает проезжую часть — это и есть переход в OSM
+function addCrossings(pathSegs) {
+  for (const p of pathSegs) {
+    const x0 = Math.floor(Math.min(p.ax, p.bx) / CELL), x1 = Math.floor(Math.max(p.ax, p.bx) / CELL);
+    const y0 = Math.floor(Math.min(p.ay, p.by) / CELL), y1 = Math.floor(Math.max(p.ay, p.by) / CELL);
+    for (let ci = x0; ci <= x1; ci++) for (let cj = y0; cj <= y1; cj++) for (const s of grid.get(ci + ',' + cj) || []) {
+      if (s.virt || (s.lvl || 0) !== p.lvl || s.kind === 'motorway' || s.kind === 'trunk' || s.kind === 'track') continue;
+      const rx = s.bx - s.ax, ry = s.by - s.ay, qx = p.bx - p.ax, qy = p.by - p.ay;
+      const den = rx * qy - ry * qx, ls = Math.hypot(rx, ry), lq = Math.hypot(qx, qy);
+      if (!ls || !lq || Math.abs(den) / ls / lq < 0.7) continue; // переходят поперёк, а не вдоль
+      const u = ((p.ax - s.ax) * qy - (p.ay - s.ay) * qx) / den, v = ((p.ax - s.ax) * ry - (p.ay - s.ay) * rx) / den;
+      if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+      const x = s.ax + u * rx, y = s.ay + u * ry;
+      const k = Math.floor(x / 20) + ',' + Math.floor(y / 20);
+      let dup = false;
+      for (let i = -1; i <= 1 && !dup; i++) for (let j = -1; j <= 1 && !dup; j++)
+        for (const c of crossGrid.get((Math.floor(x / 20) + i) + ',' + (Math.floor(y / 20) + j)) || []) if (Math.hypot(c.x - x, c.y - y) < 10) { dup = true; break; }
+      if (dup) continue;
+      const c = { x, y, ux:rx / ls, uy:ry / ls, w:s.w, seg:s };
+      crossings.push(c);
+      if (!crossGrid.has(k)) crossGrid.set(k, []); crossGrid.get(k).push(c);
+    }
+  }
+}
+function crossingNear(x, y, r) {
+  const ci = Math.floor(x / 20), cj = Math.floor(y / 20);
+  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++)
+    for (const c of crossGrid.get((ci + i) + ',' + (cj + j)) || []) if (Math.hypot(c.x - x, c.y - y) < r) return c;
+  return null;
+}
+
+// случайный участок дороги на расстоянии rMin..rMax от игрока
+function randomSeg(rMin, rMax, ok) {
+  for (let k = 0; k < 12; k++) {
+    const a = Math.random() * 6.2832, r = rMin + Math.random() * (rMax - rMin);
+    const s = realSeg(car.x + Math.sin(a) * r, car.y + Math.cos(a) * r);
+    if (s && ok(s)) return s;
+  }
+  return null;
+}
+
+// ---- машины: едут от узла к узлу графа дорог ----
+function spawnNpc(rMin, rMax) {
+  const s = randomSeg(rMin, rMax, s => s.kind !== 'track' && (s.kind !== 'service' || Math.random() < 0.2));
+  if (!s) return;
+  const fwd = s.ow === 1 ? true : s.ow === -1 ? false : Math.random() < 0.5;
+  const from = fwd ? s.na : s.nb, to = fwd ? s.nb : s.na;
+  const len = dist(from, to); if (len < 1) return;
+  const n = { id:++npcId, ghost:0, from, to, seg:s, len, s:Math.random() * len, v:0, col:NPC_COLORS[Math.floor(Math.random() * NPC_COLORS.length)], x:0, y:0, h:0, wait:0 };
+  npcPlace(n);
+  if (npcs.some(o => dist(o, n) < 14) || dist(car, n) < 12) return;
+  npcs.push(n);
+}
+function npcPlace(n) {
+  const dx = n.to.x - n.from.x, dy = n.to.y - n.from.y, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+  // правостороннее движение: смещаемся вправо от оси, если дорога двусторонняя
+  const off = n.seg && !n.seg.ow ? n.seg.w / 4 : 0;
+  const t = Math.min(n.s, n.len);
+  n.x = n.from.x + ux * t + uy * off; n.y = n.from.y + uy * t - ux * off;
+  n.h = Math.atan2(ux, uy); n.ux = ux; n.uy = uy;
+}
+function npcNext(n) {
+  // на перекрёстке — любая разрешённая дорога, кроме разворота; чаще прямо
+  const opts = [];
+  for (const e of n.to.adj) {
+    if (!e.legal || e.to === n.from || !e.to.adj) continue;
+    if (e.seg && e.seg.kind === 'track') continue;
+    const dx = e.to.x - n.to.x, dy = e.to.y - n.to.y, L = Math.hypot(dx, dy) || 1;
+    const straight = (dx * n.ux + dy * n.uy) / L;
+    if (straight < -0.3) continue; // резких поворотов назад не делаем
+    opts.push([e, Math.pow(1.3 + straight, 3)]);
+  }
+  if (!opts.length) {
+    // тупик: разворачиваемся, а не исчезаем на глазах
+    const back = n.to.adj.find(e => e.to === n.from && e.legal);
+    if (!back) return false;
+    n.from = n.to; n.to = back.to; n.s = 0; n.len = dist(n.from, n.to); return true;
+  }
+  let r = Math.random() * opts.reduce((a, o) => a + o[1], 0);
+  for (const [e, wgt] of opts) { r -= wgt; if (r <= 0) { n.from = n.to; n.to = e.to; if (e.seg) n.seg = e.seg; n.s = 0; n.len = dist(n.from, n.to); return true; } }
+  return false;
+}
+function updateNpcs(dt, now) {
+  for (let i = npcs.length - 1; i >= 0; i--) {
+    const n = npcs[i];
+    let vdes = NPC_V[n.seg && n.seg.kind] || 10;
+    const look = 8 + n.v * SCALE * 1.4;
+    const rx = n.uy, ry = -n.ux; // вправо от направления
+    // впереди машина (другая или игрок) — держим дистанцию
+    let blockedByCar = false, redStop = false;
+    const ahead = (ox, oy, lat, isCar) => { const px = ox - n.x, py = oy - n.y, al = px * n.ux + py * n.uy, lt = px * rx + py * ry;
+      if (al > 0 && al < look && Math.abs(lt) < lat) { const v = Math.max(0, (al - 6) * 0.7); if (v < vdes) { vdes = v; if (isCar) blockedByCar = true; } } };
+    // Пробки. Стоим только за попутной машиной; с поперечной на перекрёстке уступает та, у кого номер больше —
+    // иначе две машины ждали друг друга вечно и за ними копился хвост.
+    if (n.ghost <= 0) {
+      for (const o of npcs) {
+        if (o === n || o.ghost > 0) continue;
+        const same = o.ux * n.ux + o.uy * n.uy;
+        if (same > 0.3 || (same > -0.5 && n.id > o.id)) ahead(o.x, o.y, 2.2, true);
+      }
+      ahead(car.x, car.y, 2.4, true);
+      if (cop) ahead(cop.x, cop.y, 2.4, true);
+    }
+    // пешеход на переходе перед нами — стоим
+    for (const p of peds) if (p.cross) ahead(p.x, p.y, (n.seg ? n.seg.w / 2 : 3) + 1);
+    // светофор впереди не зелёный — останавливаемся перед ним (жёлтый вблизи — проезжаем)
+    for (const g of signals) {
+      const px = g.x - n.x, py = g.y - n.y; if (Math.abs(px) > 45 || Math.abs(py) > 45) continue;
+      const al = px * n.ux + py * n.uy, lt = px * rx + py * ry;
+      if (al < 3 || al > look + 10 || Math.abs(lt) > 9) continue;
+      const c = lightFor(g, n.h, now);
+      if (c === 'r' || (c === 'y' && al > 10)) { vdes = Math.min(vdes, Math.max(0, (al - 5) * 0.6)); redStop = true; }
+    }
+    // стоим за машиной (не на красный) дольше 5 с — объезжаем: 3 с не замечаем машины впереди
+    n.ghost -= dt;
+    if (n.v < 0.3 && blockedByCar && !redStop) { n.wait += dt; if (n.wait > 5) { n.ghost = 3; n.wait = 0; } } else n.wait = 0;
+    const dv = vdes - n.v;
+    n.v += Math.max(-9 * dt, Math.min(3 * dt, dv));
+    if (n.v < 0.05) n.v = 0;
+    n.s += n.v * dt * SCALE;
+    while (n.s >= n.len) { n.s -= n.len; if (!npcNext(n)) { npcs.splice(i, 1); break; } }
+    if (npcs[i] !== n) continue;
+    npcPlace(n);
+    if (dist(n, car) > NPC_R[1] + 40) npcs.splice(i, 1);
+  }
+  if (npcs.length < NPC_N) spawnNpc(!npcs.spawnedOnce ? 20 : NPC_R[0], NPC_R[1]);
+  if (npcs.length >= NPC_N) npcs.spawnedOnce = true;
+}
+
+// ---- пешеходы: идут по тротуару (сбоку от проезжей части), на «зебрах» иногда переходят ----
+const PED_KINDS = new Set(['primary', 'secondary', 'tertiary', 'residential']);
+function spawnPed(rMin, rMax) {
+  const s = randomSeg(rMin, rMax, s => PED_KINDS.has(s.kind));
+  if (!s) return;
+  const fwd = Math.random() < 0.5;
+  const p = { from:fwd ? s.na : s.nb, to:fwd ? s.nb : s.na, seg:s, s:0, side:Math.random() < 0.5 ? 1 : -1,
+              v:1.1 + Math.random() * 0.6, col:PED_COLORS[Math.floor(Math.random() * PED_COLORS.length)], x:0, y:0, cross:null, down:0, lastCross:null, ph:Math.random() * 6 };
+  p.len = dist(p.from, p.to); if (p.len < 1) return;
+  p.s = Math.random() * p.len;
+  pedPlace(p);
+  if (!p.bad && !onRoadAny(p.x, p.y) && hasSidewalk(p.from, p.to, s.w)) peds.push(p);
+}
+// точка на проезжей части любой дороги (включая склейку двойной дороги)?
+function onRoadAny(x, y, margin = 0.3) {
+  const ci = Math.floor(x / CELL), cj = Math.floor(y / CELL);
+  for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) for (const s of grid.get(i + ',' + j) || []) {
+    const dx = s.bx - s.ax, dy = s.by - s.ay, L = dx*dx + dy*dy || 1;
+    const raw = ((x - s.ax) * dx + (y - s.ay) * dy) / L;
+    if (s.virt && (raw < 0 || raw > 1)) continue;
+    const u = Math.max(0, Math.min(1, raw));
+    if (Math.hypot(x - s.ax - u * dx, y - s.ay - u * dy) < s.w / 2 + margin) return true;
+  }
+  return false;
+}
+// Тротуар — в 1,6 м за кромкой. Но у двойной дороги (Советская) с внутренней стороны половины вместо
+// тротуара разделитель и встречка: там люди гуляли по дороге. Поэтому сторона, где под ногами дорога,
+// не годится — переходим на другую; если обе заняты дорогой — пешеходу здесь не место (p.bad).
+function pedPos(p, side) {
+  const dx = p.to.x - p.from.x, dy = p.to.y - p.from.y, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+  const off = p.seg.w / 2 + 1.6, t = Math.min(p.s, p.len);
+  return { x:p.from.x + ux * t + uy * off * side, y:p.from.y + uy * t - ux * off * side, ux, uy };
+}
+function pedPlace(p) {
+  let q = pedPos(p, p.side);
+  if (onRoadAny(q.x, q.y)) {
+    const q2 = pedPos(p, -p.side);
+    if (!onRoadAny(q2.x, q2.y)) { p.side = -p.side; q = q2; }
+    else if (p.s > 3 && p.s < p.len - 3) p.bad = true; // у перекрёстка на миг можно, посреди квартала — нет
+  }
+  p.x = q.x; p.y = q.y; p.ux = q.ux; p.uy = q.uy;
+}
+// есть ли у участка хоть одна сторона без дороги (проверяем середину)
+function hasSidewalk(a, b, w) {
+  const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1, off = w / 2 + 1.6;
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, nx = dy / L * off, ny = -dx / L * off;
+  return !onRoadAny(mx + nx, my + ny) || !onRoadAny(mx - nx, my - ny);
+}
+function pedNext(p) {
+  // на перекрёстке — только улица, где есть тротуар; нет такой — разворачиваемся
+  const ok = e => e.seg && PED_KINDS.has(e.seg.kind) && hasSidewalk(p.to, e.to, e.seg.w);
+  const opts = p.to.adj.filter(e => e.to !== p.from && ok(e));
+  const e = opts.length ? opts[Math.floor(Math.random() * opts.length)] : p.to.adj.find(e => e.to === p.from && ok(e));
+  if (!e) return false;
+  p.from = p.to; p.to = e.to; p.seg = e.seg; p.s = 0; p.len = dist(p.from, p.to) || 1;
+  return true;
+}
+function updatePeds(dt, now) {
+  for (let i = peds.length - 1; i >= 0; i--) {
+    const p = peds[i];
+    p.ph += dt * 8;
+    if (p.down > 0) { p.down -= dt; continue; } // сбили — лежит, потом встаёт
+    if (p.cross) {
+      // идём поперёк дороги к противоположному тротуару
+      const c = p.cross, tx = c.tx - p.x, ty = c.ty - p.y, d = Math.hypot(tx, ty);
+      const st = p.v * 1.2 * dt * SCALE;
+      if (d <= st) { p.x = c.tx; p.y = c.ty; p.side = -p.side; p.cross = null; p.s = c.s; }
+      else { p.x += tx / d * st; p.y += ty / d * st; }
+    } else {
+      p.s += p.v * dt * SCALE;
+      while (p.s >= p.len) { p.s -= p.len; if (!pedNext(p)) { peds.splice(i, 1); break; } }
+      if (peds[i] !== p) continue;
+      pedPlace(p);
+      if (p.bad) { peds.splice(i, 1); continue; } // редкий случай: тротуара нет ни с одной стороны
+      // рядом «зебра» на нашей улице — в половине случаев переходим, если на той стороне тротуар, а не дорога
+      const c = crossingNear(p.x, p.y, p.seg.w / 2 + 3);
+      if (c && c !== p.lastCross && c.seg.name === p.seg.name) {
+        p.lastCross = c;
+        const nx = -c.uy, ny = c.ux, side = (p.x - c.x) * nx + (p.y - c.y) * ny;
+        const off = c.w / 2 + 1.6, tx = c.x - nx * Math.sign(side) * off, ty = c.y - ny * Math.sign(side) * off;
+        if (Math.random() < 0.5 && !onRoadAny(tx, ty)) {
+          p.cross = { tx, ty, s:p.s };
+          p.x = c.x + nx * Math.sign(side) * off; p.y = c.y + ny * Math.sign(side) * off;
+        }
+      }
+    }
+    // наезд: быстро въехали в пешехода — он падает, штраф и розыск
+    if (Math.abs(car.v) > 3 && dist(car, p) < 1.9 && p.down <= 0) {
+      p.down = 3.5; p.cross = null;
+      violation('Наезд на пешехода!', now); stars = Math.min(5, stars + 1);
+      car.v *= 0.6; bump = 0.3;
+    }
+    if (dist(p, car) > PED_R[1] + 40) peds.splice(i, 1);
+  }
+  if (peds.length < PED_N) spawnPed(!peds.spawnedOnce ? 10 : PED_R[0], PED_R[1]);
+  if (peds.length >= PED_N) peds.spawnedOnce = true;
+}
+
+// столкновение игрока с машинами: расталкиваемся, скорость гасится
+function collideNpcs() {
+  for (const n of npcs) {
+    if (n.ghost > 0) continue; // объезжающая машина проходит сквозь — иначе снова встанет
+    const dx = car.x - n.x, dy = car.y - n.y, d = Math.hypot(dx, dy), R = 3.2;
+    if (d > 0 && d < R) {
+      const push = R - d;
+      const c = clampToRoad(car.x + dx / d * push, car.y + dy / d * push);
+      car.x = c.x; car.y = c.y;
+      if (Math.abs(car.v) > 4) bump = 0.3;
+      car.v *= -0.25; n.v = 0;
+    }
+  }
+}
+
+function updateTraffic(dt, now) {
+  if (!trafficOn || !roadsOk) return;
+  updateNpcs(dt, now); updatePeds(dt, now); collideNpcs();
+}
+
+// ---- отрисовка на canvas поверх карты ----
+const fx = document.getElementById('fx'), fctx = fx.getContext('2d');
+function resizeFx() { const r = devicePixelRatio || 1; fx.width = innerWidth * r; fx.height = innerHeight * r; fctx.setTransform(r, 0, 0, r, 0, 0); }
+addEventListener('resize', resizeFx); resizeFx();
+function drawFx() {
+  fctx.clearRect(0, 0, innerWidth, innerHeight);
+  if (!map) return;
+  const k = 1 / mPerPx(), cx = innerWidth / 2, cy = innerHeight / 2;
+  const R = Math.hypot(cx, cy) / k + 10;
+  const sx = x => cx + (x - car.x) * k, sy = y => cy - (y - car.y) * k;
+  // зебры: белые полосы вдоль дороги поперёк всей ширины
+  if (k > 1.5) {
+    fctx.fillStyle = 'rgba(240,240,240,.75)';
+    const ci = Math.floor(car.x / 20), cj = Math.floor(car.y / 20), rr = Math.ceil(R / 20);
+    for (let i = -rr; i <= rr; i++) for (let j = -rr; j <= rr; j++) for (const c of crossGrid.get((ci + i) + ',' + (cj + j)) || []) {
+      fctx.save(); fctx.translate(sx(c.x), sy(c.y)); fctx.rotate(Math.atan2(c.ux, c.uy));
+      for (let o = -c.w / 2 + 0.4; o < c.w / 2; o += 1.1) fctx.fillRect(o * k, -1.5 * k, 0.55 * k, 3 * k);
+      fctx.restore();
+    }
+  }
+  // светофоры: кружок цвета сигнала для своего направления
+  const nowS = performance.now() / 1000;
+  for (const g of signals) {
+    if (Math.abs(g.x - car.x) > R || Math.abs(g.y - car.y) > R) continue;
+    const X = sx(g.x), Y = sy(g.y), r = Math.max(4, 0.8 * k);
+    fctx.fillStyle = '#111'; fctx.beginPath(); fctx.arc(X, Y, r + 1.5, 0, 6.2832); fctx.fill();
+    fctx.fillStyle = LCOL[lightFor(g, g.own, nowS)]; fctx.beginPath(); fctx.arc(X, Y, r, 0, 6.2832); fctx.fill();
+  }
+  // запомненный поворот: жёлтая метка на перекрёстке, где машина свернёт
+  if (turnPlan) {
+    const X = sx(turnPlan.node.x), Y = sy(turnPlan.node.y), a = Math.atan2(turnPlan.tx - turnPlan.node.x, turnPlan.ty - turnPlan.node.y);
+    fctx.save(); fctx.translate(X, Y); fctx.rotate(a);
+    fctx.fillStyle = 'rgba(255,204,51,.9)'; fctx.strokeStyle = '#111'; fctx.lineWidth = 2;
+    fctx.beginPath(); fctx.moveTo(0, -14); fctx.lineTo(10, 6); fctx.lineTo(0, 1); fctx.lineTo(-10, 6); fctx.closePath(); fctx.fill(); fctx.stroke();
+    fctx.restore();
+  }
+  if (!trafficOn) return;
+  // пешеходы
+  for (const p of peds) {
+    if (Math.abs(p.x - car.x) > R || Math.abs(p.y - car.y) > R) continue;
+    // человечек сверху: плечи (цвет одежды) и голова; крупнее реального (0,75 м), иначе на карте не видно
+    const r = Math.max(5.5, 0.9 * k), X = sx(p.x), Y = sy(p.y);
+    fctx.lineWidth = 1.5; fctx.strokeStyle = 'rgba(0,0,0,.8)';
+    if (p.down > 0) { fctx.fillStyle = p.col; fctx.fillRect(X - r * 1.6, Y - r * 0.55, r * 3.2, r * 1.1); fctx.strokeRect(X - r * 1.6, Y - r * 0.55, r * 3.2, r * 1.1); continue; }
+    const bob = Math.sin(p.ph) * r * 0.12;
+    fctx.fillStyle = p.col; fctx.beginPath(); fctx.ellipse(X, Y + bob, r, r * 0.7, Math.atan2(p.ux || 0, p.uy || 1), 0, 6.2832); fctx.fill(); fctx.stroke();
+    fctx.fillStyle = '#f0c9a0'; fctx.beginPath(); fctx.arc(X, Y + bob, r * 0.48, 0, 6.2832); fctx.fill(); fctx.stroke();
+  }
+  // машины
+  const L = CAR_L * k, W = CAR_W * k;
+  for (const n of npcs) {
+    if (Math.abs(n.x - car.x) > R || Math.abs(n.y - car.y) > R) continue;
+    fctx.save(); fctx.translate(sx(n.x), sy(n.y)); fctx.rotate(n.h);
+    fctx.fillStyle = 'rgba(0,0,0,.35)'; fctx.fillRect(-W / 2 + 1, -L / 2 + 2, W, L);
+    fctx.fillStyle = n.col; fctx.fillRect(-W / 2, -L / 2, W, L);
+    fctx.fillStyle = 'rgba(20,25,35,.85)'; fctx.fillRect(-W * 0.38, -L * 0.28, W * 0.76, L * 0.2); fctx.fillRect(-W * 0.38, L * 0.18, W * 0.76, L * 0.14);
+    if (n.v < 0.5 && k > 2) { fctx.fillStyle = '#ff3030'; fctx.fillRect(-W / 2, L / 2 - 2, W * 0.25, 2); fctx.fillRect(W / 4, L / 2 - 2, W * 0.25, 2); } // стоп-сигналы
+    fctx.restore();
+  }
+}
+
 // ---------- физика машины ----------
 function updateCar(dt) {
   const hb = keys.hb;
@@ -990,21 +1556,49 @@ function updateCar(dt) {
     const grip = Math.min(1, Math.abs(car.v) / 5) * Math.sign(car.v);
     car.a += steer * (hb ? 3.4 : 2.1) * grip * dt;
   } else {
-    // по карте (как GTA 2): стрелка = направление на экране, машина сама поворачивает туда и едет
+    // по карте (как GTA 2): стрелка = направление на экране, машина сама поворачивает туда и едет.
+    // «Магнит к дороге»: машина всё время держит свою улицу и полосу; свернуть можно только «усилием» —
+    // удерживая стрелку в новую сторону INTENT_T секунд. Короткое или неточное нажатие не сбивает с дороги.
     const sx = (keys.right ? 1 : 0) - (keys.left ? 1 : 0), sy = (keys.up ? 1 : 0) - (keys.down ? 1 : 0);
+    const follow = car.v > 1 ? roadHeading(car.x, car.y, car.a) : null; // «вперёд по своей улице»
+    const steerTo = target => {
+      let d = target - car.a; while (d > Math.PI) d -= 2*Math.PI; while (d < -Math.PI) d += 2*Math.PI;
+      const turn = (hb ? 4.5 : 3.2) * Math.min(1, 0.35 + Math.abs(car.v) / 8) * dt;
+      car.a += Math.max(-turn, Math.min(turn, d));
+      return d;
+    };
+    turnPlan = null;
     if (sx || sy) {
       if (car.v < 0) car.v = Math.min(0, car.v + 22 * dt);
       const want = Math.atan2(sx, sy);
-      // в желаемую сторону дороги нет, а машина едет — продолжаем по текущей улице и свернём на ближайшем перекрёстке
-      let h = roadHeading(car.x, car.y, want);
-      if (h === null && car.v > 3) h = roadHeading(car.x, car.y, car.a);
-      let da = (h === null ? want : h) - car.a;
-      while (da > Math.PI) da -= 2*Math.PI; while (da < -Math.PI) da += 2*Math.PI;
-      const turn = (hb ? 4.5 : 3.2) * Math.min(1, 0.35 + Math.abs(car.v) / 8) * dt;
-      car.a += Math.max(-turn, Math.min(turn, da));
-      if (Math.abs(da) < 1.2) car.v += 11 * dt;                   // смотрим почти туда — газ
-      else car.v = Math.max(1.5, car.v - 16 * dt);                 // разворот — сбрасываем скорость, крутимся почти на месте
-    } else coast();
+      let dW = want - car.a; while (dW > Math.PI) dW -= 2*Math.PI; while (dW < -Math.PI) dW += 2*Math.PI;
+      if (Math.abs(dW) > 0.9 && car.v > 2) { if (intent.want !== want) { intent.want = want; intent.t = 0; } intent.t += dt; }
+      else { intent.want = null; intent.t = 0; }
+      const committed = Math.abs(dW) <= 0.9 || car.v <= 2 || intent.t >= INTENT_T;
+      if (!committed) {
+        if (follow !== null) steerTo(follow);                        // пока «усилия» мало — едем по своей улице
+      } else {
+        // в желаемую сторону дороги нет, а машина едет — продолжаем по текущей улице и свернём на ближайшем перекрёстке
+        let h = roadHeading(car.x, car.y, want), braking = false;
+        if (h === null && car.v > 3) {
+          h = follow;
+          const plan = junctionAhead(want);
+          if (plan) {
+            turnPlan = plan;
+            const vTurn = 7, brakeD = (car.v * car.v - vTurn * vTurn) / 20 * SCALE + 6;
+            if (car.v > vTurn && plan.d < brakeD) { car.v = Math.max(vTurn, car.v - 14 * dt); braking = true; } // сбавляем перед поворотом
+            if (plan.d < 7) h = Math.atan2(plan.tx - car.x, plan.ty - car.y);                // и заходим в него
+          }
+        }
+        const da = steerTo(h === null ? want : h);
+        if (braking) {}                                              // тормозим к повороту — без газа
+        else if (Math.abs(da) < 1.2) car.v += 11 * dt;              // смотрим почти туда — газ
+        else car.v = Math.max(1.5, car.v - 16 * dt);                 // разворот — сбрасываем скорость, крутимся почти на месте
+      }
+    } else {
+      coast(); intent.want = null; intent.t = 0;
+      if (follow !== null) steerTo(follow);                          // и без стрелок машина держит дорогу
+    }
     if (keys.back) car.v -= (car.v > 0 ? 22 : 7) * dt;           // S/X в этом режиме — задний ход
   }
   if (hb) car.v -= Math.sign(car.v) * Math.min(Math.abs(car.v), 9 * dt);
@@ -1034,6 +1628,7 @@ function loop(t) {
   updateCop(dt);
   const now = t / 1000;
   checkRules(dt, now); updateWanted(); updateSignals(now);
+  updateTraffic(dt, now);
   $('stars').textContent = '★'.repeat(stars) + '☆'.repeat(5 - stars);
   updateJob(dt);
 
@@ -1088,6 +1683,7 @@ function loop(t) {
     }
     $('timer').textContent = '';
   }
+  drawFx();
   requestAnimationFrame(loop);
 }
 
@@ -1100,6 +1696,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyM') openBoard();
   if (e.code === 'Escape') closeBoard();
   if (/^Digit[1-4]$/.test(e.code) && $('board').style.display !== 'none') takeJob(+e.code.slice(5) - 1);
+  if (e.code === 'KeyT') { trafficOn = !trafficOn; if (!trafficOn) { npcs.length = 0; peds.length = 0; } toast(trafficOn ? 'Трафик включён' : 'Трафик выключен', '#ffcc33'); }
   if (e.code === 'KeyC') { classic = !classic; toast(classic ? 'Управление: классика' : 'Управление: по карте', '#ffcc33'); }
   if (e.key === '+' || e.key === '=') { zoom = Math.min(20, zoom + 0.5); applyZoom(); }
   if (e.key === '-') { zoom = Math.max(13, zoom - 0.5); applyZoom(); }
